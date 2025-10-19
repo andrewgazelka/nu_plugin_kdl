@@ -3,7 +3,7 @@ bench = false
 name = "nu_plugin_kdl"
 
 [dependencies]
-kdl = { version = "6.5.0", features = ["v1-fallback"] }
+kdl = { version = "6.5.0", features = ["v1"] }
 miette = "7.6.0"
 nu-plugin = "0.108.0"
 nu-protocol = { version = "0.108.0", features = ["plugin"] }
