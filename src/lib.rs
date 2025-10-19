@@ -1,8 +1,8 @@
 mod from;
 mod to;
 
-use nu_plugin::{EvaluatedCall, LabeledError, Plugin};
-use nu_protocol::{Category, PluginExample, PluginSignature, Type, Value};
+use nu_plugin::{EngineInterface, EvaluatedCall, Plugin, PluginCommand};
+use nu_protocol::{Category, LabeledError, PipelineData, Signature, Type, Value};
 
 use kdl::KdlDocument;
 
@@ -10,20 +10,12 @@ pub struct KDL;
 
 impl KDL {
     pub fn from(&self, _call: &EvaluatedCall, input: &Value) -> Result<Value, LabeledError> {
-        let doc = match input
-            .as_string()
-            .expect("input is not a string")
-            .parse::<KdlDocument>()
-        {
-            Ok(document) => document,
-            Err(err) => {
-                return Err(LabeledError {
-                    label: err.label.unwrap_or("invalid format").to_string(),
-                    msg: err.help.unwrap_or("input to `kdl from` has invalid KDL format").to_string(),
-                    span: None,
-                })
-            }
-        };
+        let input_str = input
+            .as_str()
+            .map_err(|e| LabeledError::new(format!("input is not a string: {}", e)))?;
+
+        let doc = input_str.parse::<KdlDocument>()
+            .map_err(|e| LabeledError::new(format!("invalid KDL format: {}", e)))?;
 
         Ok(from::parse_document(&doc))
     }
@@ -34,44 +26,137 @@ impl KDL {
     }
 }
 
+pub struct FromKdl;
+pub struct ToKdl;
+
 impl Plugin for KDL {
-    fn signature(&self) -> Vec<PluginSignature> {
-        vec![
-            PluginSignature::build("from kdl")
-                .usage("TODO")
-                .input_output_type(Type::String, Type::Record(vec![]))
-                .plugin_examples(vec![PluginExample {
-                    example: "open foo.kdl | from kdl".into(),
-                    description: "TODO".into(),
-                    result: None,
-                }])
-                .category(Category::Experimental),
-            PluginSignature::build("to kdl")
-                .usage("TODO")
-                .input_output_type(Type::Record(vec![]), Type::String)
-                .plugin_examples(vec![PluginExample {
-                    example: "{foo: [1, 2, 3]} | to kdl".into(),
-                    description: "TODO".into(),
-                    result: None,
-                }])
-                .category(Category::Experimental),
-        ]
+    fn version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    fn commands(&self) -> Vec<Box<dyn PluginCommand<Plugin = Self>>> {
+        vec![Box::new(FromKdl), Box::new(ToKdl)]
+    }
+}
+
+impl PluginCommand for FromKdl {
+    type Plugin = KDL;
+
+    fn name(&self) -> &str {
+        "from kdl"
+    }
+
+    fn description(&self) -> &str {
+        "Convert KDL document to Nushell record"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::build(PluginCommand::name(self))
+            .input_output_type(Type::String, Type::Record(vec![].into()))
+            .category(Category::Experimental)
     }
 
     fn run(
-        &mut self,
-        name: &str,
+        &self,
+        plugin: &KDL,
+        _engine: &EngineInterface,
         call: &EvaluatedCall,
-        input: &Value,
-    ) -> Result<Value, LabeledError> {
-        match name {
-            "from kdl" => self.from(call, input),
-            "to kdl" => self.to(call, input),
-            _ => Err(LabeledError {
-                label: "Plugin call with wrong name signature".into(),
-                msg: "the signature used to call the plugin does not match any name in the plugin signature vector".into(),
-                span: Some(call.head),
-            }),
+        input: PipelineData,
+    ) -> Result<PipelineData, LabeledError> {
+        let value = input.into_value(call.head)?;
+        let result = plugin.from(call, &value)?;
+        Ok(PipelineData::Value(result, None))
+    }
+}
+
+impl PluginCommand for ToKdl {
+    type Plugin = KDL;
+
+    fn name(&self) -> &str {
+        "to kdl"
+    }
+
+    fn description(&self) -> &str {
+        "Convert Nushell record to KDL document"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::build(PluginCommand::name(self))
+            .input_output_type(Type::Record(vec![].into()), Type::String)
+            .category(Category::Experimental)
+    }
+
+    fn run(
+        &self,
+        plugin: &KDL,
+        _engine: &EngineInterface,
+        call: &EvaluatedCall,
+        input: PipelineData,
+    ) -> Result<PipelineData, LabeledError> {
+        let value = input.into_value(call.head)?;
+        let result = plugin.to(call, &value)?;
+        Ok(PipelineData::Value(result, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_zellij_layout() {
+        let input = include_str!("../zellij-layout.kdl");
+        let result = input.parse::<KdlDocument>();
+
+        match &result {
+            Ok(doc) => {
+                println!("Successfully parsed document with {} nodes", doc.nodes().len());
+                for node in doc.nodes() {
+                    println!("  Node: {}", node.name());
+                }
+            }
+            Err(e) => {
+                println!("Parse error: {}", e);
+            }
         }
+
+        assert!(result.is_ok(), "Failed to parse zellij-layout.kdl: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_simple_kdl() {
+        let input = r#"node1 "value1"
+node2 123"#;
+        let result = input.parse::<KdlDocument>();
+        assert!(result.is_ok(), "Failed to parse simple KDL: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_kdl_with_children() {
+        let input = r#"parent {
+    child "value"
+}"#;
+        let result = input.parse::<KdlDocument>();
+        assert!(result.is_ok(), "Failed to parse KDL with children: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_kdl_with_properties() {
+        let input = r#"pane size=1 borderless=true"#;
+        let result = input.parse::<KdlDocument>();
+        if let Err(e) = &result {
+            println!("Error parsing properties: {}", e);
+        }
+        assert!(result.is_ok(), "Failed to parse KDL with properties: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_kdl_bare_word() {
+        let input = r#"children"#;
+        let result = input.parse::<KdlDocument>();
+        if let Err(e) = &result {
+            println!("Error parsing bare word: {}", e);
+        }
+        assert!(result.is_ok(), "Failed to parse bare word: {:?}", result.err());
     }
 }

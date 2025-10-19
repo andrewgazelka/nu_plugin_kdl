@@ -1,0 +1,23 @@
+// NOTE: This file is NOT used directly by zellij-run.sh
+// The actual layout is dynamically generated at runtime based on *.log files in ~/.superglide/logs/
+// This is kept as a reference template only.
+
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="logs" focus=true {
+        pane split_direction="horizontal" {
+            // Panes are auto-generated for each *.log file in ~/.superglide/logs/
+            // To add a log viewer: just create a .log file in ~/.superglide/logs/
+            // To remove a log viewer: delete the .log file from ~/.superglide/logs/
+        }
+    }
+}

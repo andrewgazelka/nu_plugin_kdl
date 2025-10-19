@@ -1,20 +1,20 @@
-use nu_protocol::{Span, Value};
+use nu_protocol::{Record, Span, Value};
 
 use kdl::{KdlDocument, KdlEntry, KdlNode, KdlValue};
 
 pub(crate) fn parse_document(document: &KdlDocument) -> Value {
-    let cols: Vec<String> = document
-        .nodes()
-        .iter()
-        .map(|node| node.name().to_string())
-        .collect();
-    let vals = document.nodes().iter().map(parse_node).collect();
+    let mut record = Record::new();
+
+    for node in document.nodes() {
+        record.insert(node.name().to_string(), parse_node(node));
+    }
+
     let span = Span::new(
         document.span().offset(),
         document.span().offset() + document.len(),
     );
 
-    Value::record(cols, vals, span)
+    Value::record(record, span)
 }
 
 fn parse_node(node: &KdlNode) -> Value {
@@ -36,11 +36,10 @@ fn parse_node(node: &KdlNode) -> Value {
             Value::list(entries, Span::unknown())
         };
 
-        Value::Record {
-            cols: vec!["entries".to_string(), "children".to_string()],
-            vals: vec![entries, children],
-            span,
-        }
+        let mut record = Record::new();
+        record.insert("entries".to_string(), entries);
+        record.insert("children".to_string(), children);
+        Value::record(record, span)
     } else {
         if entries.is_empty() {
             // FIXME: use a real span
@@ -58,23 +57,30 @@ fn parse_entry(entry: &KdlEntry) -> Value {
     let span = Span::new(entry.span().offset(), entry.span().offset() + entry.len());
 
     let value = match entry.value() {
-        KdlValue::RawString(val) => Value::string(val.to_string(), span),
-        KdlValue::String(val) => Value::string(val.to_string(), span),
-        KdlValue::Base2(val) => Value::int(*val, span),
-        KdlValue::Base8(val) => Value::int(*val, span),
-        KdlValue::Base10(val) => Value::int(*val, span),
-        KdlValue::Base16(val) => Value::int(*val, span),
-        KdlValue::Base10Float(val) => Value::float(*val, span),
+        KdlValue::String(val) => Value::string(val, span),
         KdlValue::Bool(val) => Value::bool(*val, span),
         KdlValue::Null => Value::nothing(span),
+        val => {
+            // Try to convert to string first, then parse as number
+            let s = val.to_string();
+            // Try parsing as int first
+            if let Ok(i) = s.parse::<i64>() {
+                Value::int(i, span)
+            } else if let Ok(f) = s.parse::<f64>() {
+                Value::float(f, span)
+            } else {
+                // Fallback to string representation
+                Value::string(s, span)
+            }
+        }
     };
 
     match entry.name() {
-        Some(name) => Value::Record {
-            cols: vec![name.value().to_string()],
-            vals: vec![value],
-            span,
-        },
+        Some(name) => {
+            let mut record = Record::new();
+            record.insert(name.value().to_string(), value);
+            Value::record(record, span)
+        }
         None => value,
     }
 }
